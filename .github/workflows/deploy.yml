@@ -1,14 +1,16 @@
 name: Build and Deploy
 
 on:
+  #workflow_dispatch: {}
   push:
     branches: [main]
   pull_request:
 
 env:
   applicationfolder: spring-boot-hello-world-example
-  AWS_REGION: ap-southeast-2
+  AWS_REGION: ap-southeast-2 # <replace this with your AWS region>
   S3BUCKET: codedeploystack-webappdeploymentbucket-eyzdtkjsotrx
+  S3bucket_CodeGuru: codeguru-reviewer-my-bucket-12345678 # S3 Bucket with "codeguru-reviewer-*" prefix
 
 jobs:
   build:
@@ -44,8 +46,70 @@ jobs:
         working-directory: ${{ env.applicationfolder }}/target
         run: aws s3 cp *.war s3://${{ env.S3BUCKET }}/
 
-  deploy:
+      - name: Artifacts for codescan action
+        uses: actions/upload-artifact@v2
+        with:
+          name: build-file
+          path: ${{ env.applicationfolder }}/target/*.war
+
+  codescan:
     needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Download an artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: build-file
+
+      - name: Configure AWS credentials
+        id: iam-role
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.IAMROLE_GITHUB }}
+          role-session-name: GitHub-Action-Role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: actions/checkout@v2
+        if: steps.iam-role.outcome == 'success'
+        with:
+          fetch-depth: 0
+
+      - name: CodeGuru Reviewer
+        uses: aws-actions/codeguru-reviewer@v1.1
+        if: ${{ always() }}
+        continue-on-error: false
+        with:
+          s3_bucket: ${{ env.S3bucket_CodeGuru }}
+          build_path: .
+
+      - name: Store SARIF file
+        if: steps.iam-role.outcome == 'success'
+        uses: actions/upload-artifact@v2
+        with:
+          name: SARIF_recommendations
+          path: ./codeguru-results.sarif.json
+
+      - name: Upload review result
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: codeguru-results.sarif.json
+
+      - run: |
+
+          echo "Check for critical volnurability"
+          count=$(cat codeguru-results.sarif.json | jq '.runs[].results[] | select(.level == "error") | .level' | wc -l)
+          if (( $count > 0 )); then
+            echo "There are $count critical findings, hence stopping the pipeline."
+            exit 1
+          fi
+  deploy:
+    needs: codescan
     runs-on: ubuntu-latest
     environment: Dev
     permissions:

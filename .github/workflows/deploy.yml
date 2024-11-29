@@ -47,7 +47,7 @@ jobs:
         run: aws s3 cp *.war s3://${{ env.S3BUCKET }}/
 
       - name: Artifacts for codescan action
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: build-file
           path: ${{ env.applicationfolder }}/target/*.war
@@ -90,7 +90,7 @@ jobs:
 
       - name: Store SARIF file
         if: steps.iam-role.outcome == 'success'
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: SARIF_recommendations
           path: ./codeguru-results.sarif.json
